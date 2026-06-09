@@ -12,7 +12,7 @@ import os
 import time
 import threading
 from collections import deque
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import urljoin, urlparse, urlunparse
@@ -77,6 +77,7 @@ RESOURCE_ATTRS = [
 ]
 
 _thread_local = threading.local()
+STOP_EVENT = threading.Event()
 
 icon = r"""
        _.-----._
@@ -91,7 +92,6 @@ icon = r"""
 
      DirLens | https://github.com/LTX128/Dirlens
 """
-
 def _get_thread_session(timeout: int) -> requests.Session:
     """Return (or create) a per-thread requests.Session."""
     if not hasattr(_thread_local, "session"):
@@ -392,6 +392,9 @@ class DirLens:
 
     def _crawl_worker(self, url: str, depth: int):
         """Fetch one page, extract resources, return (new_pages, new_dirs)."""
+        if STOP_EVENT.is_set():
+            return [], []
+
         with self._lock:
             if url in self.crawled_urls or self.pages_crawled >= self.max_pages:
                 return [], []
@@ -403,6 +406,9 @@ class DirLens:
         resp = fetch(url, self.timeout)
         if self.delay:
             time.sleep(self.delay)
+
+        if STOP_EVENT.is_set():
+            return [], []
 
         if not resp:
             with self._lock:
@@ -471,27 +477,51 @@ class DirLens:
         wave_num = 0
 
         while wave:
+            if STOP_EVENT.is_set():
+                break
+
             wave_num += 1
             safe_print(p.dim(f"  crawl wave {wave_num}: {len(wave)} pages ..."))
 
             next_wave = []
-            with ThreadPoolExecutor(max_workers=self.crawl_workers) as pool:
+            pool = ThreadPoolExecutor(max_workers=self.crawl_workers)
+            try:
                 futures = {
                     pool.submit(self._crawl_worker, url, dep): (url, dep)
                     for url, dep in wave
                 }
-                for future in as_completed(futures):
-                    try:
-                        new_pages, new_dirs = future.result()
-                    except Exception:
-                        new_pages, new_dirs = [], []
+                pending = set(futures)
+                while pending:
+                    done, pending = wait(
+                        pending, timeout=0.1, return_when=FIRST_COMPLETED
+                    )
+                    if not done:
+                        continue
 
-                    next_wave.extend(new_pages)
-                    all_dirs.extend(new_dirs)
+                    for future in done:
+                        try:
+                            new_pages, new_dirs = future.result()
+                        except Exception:
+                            new_pages, new_dirs = [], []
 
-                    with self._lock:
-                        if self.pages_crawled >= self.max_pages:
-                            break
+                        next_wave.extend(new_pages)
+                        all_dirs.extend(new_dirs)
+
+                        with self._lock:
+                            if self.pages_crawled >= self.max_pages:
+                                pending.clear()
+                                break
+
+                    if STOP_EVENT.is_set():
+                        pending.clear()
+                        break
+
+            except KeyboardInterrupt:
+                STOP_EVENT.set()
+                pool.shutdown(wait=False, cancel_futures=True)
+                raise
+            else:
+                pool.shutdown(wait=True)
 
             seen = set()
             deduped = []
@@ -509,6 +539,9 @@ class DirLens:
 
     def _test_worker(self, url: str):
         """Test one directory URL for open listing. Thread-safe."""
+        if STOP_EVENT.is_set():
+            return
+
         with self._lock:
             if url in self.dirs_tested:
                 return
@@ -517,6 +550,9 @@ class DirLens:
         resp = fetch(url, self.timeout)
         if self.delay:
             time.sleep(self.delay)
+
+        if STOP_EVENT.is_set():
+            return
 
         code = resp.status_code if resp else "timeout"
         self._print("test", url, code)
@@ -538,13 +574,30 @@ class DirLens:
                 self._print("error", url, code)
 
     def _run_parallel_tests(self, dirs: list):
-        with ThreadPoolExecutor(max_workers=self.test_workers) as pool:
+        pool = ThreadPoolExecutor(max_workers=self.test_workers)
+        try:
             futures = {pool.submit(self._test_worker, url): url for url in dirs}
-            for future in as_completed(futures):
-                try:
-                    future.result()
-                except Exception:
-                    pass
+            pending = set(futures)
+            while pending:
+                done, pending = wait(pending, timeout=0.1, return_when=FIRST_COMPLETED)
+                if not done:
+                    continue
+
+                for future in done:
+                    try:
+                        future.result()
+                    except Exception:
+                        pass
+
+                if STOP_EVENT.is_set():
+                    pending.clear()
+                    break
+        except KeyboardInterrupt:
+            STOP_EVENT.set()
+            pool.shutdown(wait=False, cancel_futures=True)
+            raise
+        else:
+            pool.shutdown(wait=True)
 
     def run(self):
         time.sleep(1)
@@ -876,11 +929,15 @@ def main():
         sys.exit(1)
 
     try:
+        STOP_EVENT.clear()
         DirLens(args).run()
     except KeyboardInterrupt:
-        print("\n[!] Scan interrupted !", file=sys.stderr)
+        STOP_EVENT.set()
+        p = Palette(enabled=not args.no_color)
+        safe_print("")
+        safe_print(p.red("[!] Scan interrupted !"))
         print()
-        sys.exit(0)
+        os._exit(130)
 
 
 if __name__ == "__main__":
