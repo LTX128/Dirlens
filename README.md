@@ -6,9 +6,6 @@ It crawls only paths discovered on the target website, such as links, resources,
 `robots.txt`, and sitemap entries. It does not use bruteforce, wordlists, or
 invented paths.
 
-By LTX  
-https://github.com/LTX128/Dirlens
-
 ## Features
 
 - Detects exposed directory listings
