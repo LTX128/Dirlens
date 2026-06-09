@@ -1,7 +1,7 @@
 """
 DirLens - Directory Listing Scanner
 Detects open directory listings using only paths discovered on the target site.
-No bruteforce. No wordlists. No invented paths.
+No bruteforce. No wordlists.
 """
 
 import argparse
