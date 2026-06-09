@@ -78,5 +78,7 @@ directories, forbidden paths, errors, and any open directory listings found.
 
 Use DirLens only on websites you own or have explicit permission to test.
 
+--
+
 ## Preview
 ![DirLens preview](screenshot.png)
