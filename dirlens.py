@@ -80,17 +80,13 @@ _thread_local = threading.local()
 STOP_EVENT = threading.Event()
 
 icon = r"""
-       _.-----._
-     .'.-'''''-.'._
-    //`.:#:'    `\\
-   ;; '           ;;'.__.===============,
-   ||             ||  __                 )
-   ;;             ;;.'  '==============='
-    \\           ///
-     ':.._____..:'~
-       `'-----'`
-
-     DirLens | https://github.com/LTX128/Dirlens
+██████  ██ ██████  ██      ███████ ███    ██ ███████ 
+██   ██ ██ ██   ██ ██      ██      ████   ██ ██      
+██   ██ ██ ██████  ██      █████   ██ ██  ██ ███████ 
+██   ██ ██ ██   ██ ██      ██      ██  ██ ██      ██ 
+██████  ██ ██   ██ ███████ ███████ ██   ████ ███████ 
+                                                     
+        https://github.com/LTX128/Dirlens
 """
 def _get_thread_session(timeout: int) -> requests.Session:
     """Return (or create) a per-thread requests.Session."""
@@ -641,7 +637,6 @@ class DirLens:
                 seen.add(url)
                 deduped_seed.append((url, dep))
 
-        print()
         safe_print(p.white("[*] Phase 2 - Crawling pages"))
         crawl_dirs = self._run_parallel_crawl(deduped_seed)
 
@@ -656,7 +651,6 @@ class DirLens:
                 f"{len(all_dirs_set)} directories queued"
             )
         )
-        safe_print("")
 
         safe_print(p.white("[*] Phase 3 - Testing directories for open listings"))
         safe_print("")
