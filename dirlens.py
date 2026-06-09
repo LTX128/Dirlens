@@ -89,7 +89,7 @@ icon = r"""
      ':.._____..:'~
        `'-----'`
 
-        BY LTX | https://github.com/LTX128/Dirlens
+     DirLens | https://github.com/LTX128/Dirlens
 """
 
 def _get_thread_session(timeout: int) -> requests.Session:
