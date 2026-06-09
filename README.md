@@ -38,7 +38,7 @@ python dirlens.py https://example.com --json --html
 With custom crawl settings:
 
 ```bash
-python dirlens.py https://example.com --depth 3 --max-pages 200 --workers 20 --delay 0 --timeout 6
+python dirlens.py https://example.com --depth 3 --max-pages 200 --workers 20 --delay 0
 ```
 
 ## Options
