@@ -91,8 +91,8 @@ Use `-h` to display the help screen:
 python dirlens.py -h
 ```
 
-## Screenshot
-[screenshot.png]
+## Preview
+![DirLens preview](screenshot.png)
 
 ## Speed mode
 
