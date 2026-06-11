@@ -17,7 +17,7 @@ import threading
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import datetime
 from pathlib import Path
-from urllib.parse import urljoin, urlparse, urlunparse
+from urllib.parse import parse_qsl, urljoin, urlparse, urlunparse
 import xml.etree.ElementTree as ET
 
 import requests
@@ -226,6 +226,23 @@ COMMON_PATHS = [
     "/.git", "/.env", "/.htaccess",
     "/feed", "/feed.xml", "/rss", "/rss.xml", "/atom.xml",
     "/health", "/healthcheck", "/ping", "/status", "/version.txt",
+]
+
+WORDPRESS_REST_API_PATHS = [
+    "/wp-json",
+    "/wp-json/wp/v2/users",
+    "/wp-json/wp/v2/users?per_page=100",
+    "/wp-json/wp/v2/posts",
+    "/wp-json/wp/v2/pages",
+    "/wp-json/wp/v2/media",
+    "/wp-json/wp/v2/comments",
+    "/wp-json/wp/v2/tags",
+    "/wp-json/wp/v2/categories",
+    "/wp-json/oembed/1.0/embed",
+    "/?rest_route=/wp/v2/users",
+    "/?rest_route=/wp/v2/users&per_page=100",
+    "/?rest_route=/wp/v2/posts",
+    "/?rest_route=/wp/v2/pages",
 ]
 
 DIRECTORY_LISTING_SIGNATURES = [
@@ -455,6 +472,12 @@ class Palette:
     def yellow(self, text):
         return self._c(Fore.YELLOW, text)
 
+    def magenta(self, text):
+        return self._c(Fore.MAGENTA, text)
+
+    def bright_magenta(self, text):
+        return self._c(Style.BRIGHT + Fore.MAGENTA, text)
+
     def cyan(self, text):
         return self._c(Fore.CYAN, text)
 
@@ -593,6 +616,8 @@ def effective_sensitive_file_marker(path: str) -> str:
 
 
 def should_probe_slash_variant(url: str) -> bool:
+    if urlparse(url).query:
+        return False
     path = urlparse(url).path.rstrip("/")
     if not path or path == "/":
         return False
@@ -695,6 +720,55 @@ def is_known_public_path(url: str) -> bool:
     return looks_like_sitemap_url(url)
 
 
+def is_wordpress_rest_api_url(url: str) -> bool:
+    parsed = urlparse(url)
+    path = (parsed.path or "/").lower().rstrip("/")
+    if path == "/wp-json" or path.startswith("/wp-json/"):
+        return True
+    params = {
+        key.lower(): value.lower()
+        for key, value in parse_qsl(parsed.query, keep_blank_values=True)
+    }
+    return params.get("rest_route", "").lower().startswith("/wp/v2/")
+
+
+def is_wordpress_users_api_url(url: str) -> bool:
+    parsed = urlparse(url)
+    path = (parsed.path or "/").lower().rstrip("/")
+    if path == "/wp-json/wp/v2/users" and not parsed.query:
+        return True
+    params = [
+        (key.lower(), value.lower())
+        for key, value in parse_qsl(parsed.query, keep_blank_values=True)
+    ]
+    return len(params) == 1 and params[0] == ("rest_route", "/wp/v2/users")
+
+
+def is_json_like_response(response: "requests.Response") -> bool:
+    ctype = response.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+    if "json" in ctype:
+        return True
+    try:
+        body = response.text.lstrip()[:1]
+    except Exception:
+        return False
+    return body in ("{", "[")
+
+
+def is_wordpress_users_api_finding(response: "requests.Response") -> bool:
+    return (
+        response.status_code == 200
+        and is_wordpress_users_api_url(response.url)
+        and is_json_like_response(response)
+    )
+
+
+def is_wordpress_api_finding(response: "requests.Response") -> bool:
+    if response.status_code != 200 or not is_wordpress_rest_api_url(response.url):
+        return False
+    return is_json_like_response(response)
+
+
 def is_interesting_exposure(response: "requests.Response") -> bool:
     if response.status_code != 200:
         return False
@@ -742,6 +816,10 @@ def classify_response(response: "requests.Response | None") -> str:
     if code == 200:
         if is_directory_listing(response):
             return "listing"
+        if is_wordpress_users_api_finding(response):
+            return "wordpress_users_api"
+        if is_wordpress_api_finding(response):
+            return "wordpress_api"
         if is_interesting_exposure(response):
             return "exposed"
         return "clean"
@@ -795,6 +873,8 @@ class DirLens:
 
         self.listings_found: list = []
         self.exposed_paths: list = []
+        self.wordpress_users_api_paths: list = []
+        self.wordpress_api_paths: list = []
         self.forbidden_paths: list = []
         self.login_warning_paths: list = []
         self.errors: int = 0
@@ -812,6 +892,8 @@ class DirLens:
         return {
             "listing": p.green("[FOUND]"),
             "exposed": p.yellow("[EXPOSED]"),
+            "wordpress_users_api": p.bright_magenta("[WP-USERS]"),
+            "wordpress_api": p.magenta("[WP-API]"),
             "forbidden": p.yellow("[403]"),
             "test": p.red("[TEST]"),
             "error": p.dim("[ERR]"),
@@ -834,7 +916,7 @@ class DirLens:
         return p.dim(text)
 
     def _print(self, status: str, url: str, code=None):
-        if self.quiet and status not in ("listing", "exposed", "forbidden"):
+        if self.quiet and status not in ("listing", "exposed", "wordpress_users_api", "wordpress_api", "forbidden"):
             return
         code_text = f" {self._code_tag(code)}" if code is not None else ""
         safe_print(f"{self._tag(status)}{code_text} {url}")
@@ -1615,6 +1697,20 @@ class DirLens:
                 added = append_unique_result(self.listings_found, url)
             if added:
                 self._print("listing", display_url, code)
+        elif status == "wordpress_users_api":
+            found_url = resp.url if resp is not None else url
+            display_url = canonical_result_url(found_url)
+            with self._lock:
+                added = append_unique_result(self.wordpress_users_api_paths, found_url)
+            if added:
+                self._print("wordpress_users_api", display_url, code)
+        elif status == "wordpress_api":
+            found_url = resp.url if resp is not None else url
+            display_url = canonical_result_url(found_url)
+            with self._lock:
+                added = append_unique_result(self.wordpress_api_paths, found_url)
+            if added:
+                self._print("wordpress_api", display_url, code)
         elif status == "exposed":
             found_url = resp.url if resp is not None else url
             display_url = canonical_result_url(found_url)
@@ -1652,6 +1748,8 @@ class DirLens:
                 extra = (
                     f"tested {len(self.dirs_tested)}, "
                     f"found {len(self.listings_found)}, "
+                    f"wp-users {len(self.wordpress_users_api_paths)}, "
+                    f"wp-api {len(self.wordpress_api_paths)}, "
                     f"exposed {len(self.exposed_paths)}, "
                     f"403 {len(self.forbidden_paths)}, "
                     f"429 {self.rate_limit_hits}, "
@@ -1792,12 +1890,13 @@ class DirLens:
             seed_crawl.insert(0, (self.target, 0))
 
             if not self.no_common:
+                common_seed_paths = COMMON_PATHS + WORDPRESS_REST_API_PATHS
                 if not self.quiet:
-                    safe_print(p.white(f"[*] Phase 1b - Seeding {len(COMMON_PATHS)} common paths"))
-                total_common = len(COMMON_PATHS)
+                    safe_print(p.white(f"[*] Phase 1b - Seeding {len(common_seed_paths)} common/API paths"))
+                total_common = len(common_seed_paths)
                 last_common_progress = 0.0
                 self._progress("Phase 1b common paths", 0, total_common, "seeding")
-                for idx, path in enumerate(COMMON_PATHS, start=1):
+                for idx, path in enumerate(common_seed_paths, start=1):
                     url = normalise_url(base + path)
                     with self._lock:
                         self.resources_found.add(url)
@@ -1864,6 +1963,8 @@ class DirLens:
         self._ui_sleep(1)
         self.listings_found = dedupe_result_urls(self.listings_found)
         self.exposed_paths = dedupe_result_urls(self.exposed_paths)
+        self.wordpress_users_api_paths = dedupe_result_urls(self.wordpress_users_api_paths)
+        self.wordpress_api_paths = dedupe_result_urls(self.wordpress_api_paths)
         self.forbidden_paths = dedupe_result_urls(self.forbidden_paths)
         self.login_warning_paths = dedupe_result_urls(self.login_warning_paths)
 
@@ -1893,6 +1994,10 @@ class DirLens:
             safe_print(p.yellow(f"  Exposed paths      : {len(self.exposed_paths)}"))
         elif not self.quiet:
             safe_print(p.white(f"  Exposed paths      : 0"))
+        if self.wordpress_users_api_paths:
+            safe_print(p.bright_magenta(f"  WP users API       : {len(self.wordpress_users_api_paths)}"))
+        if self.wordpress_api_paths:
+            safe_print(p.magenta(f"  WordPress API      : {len(self.wordpress_api_paths)}"))
         if not self.quiet:
             safe_print(p.yellow(f"  Forbidden paths    : {len(self.forbidden_paths)}"))
             if self.speed:
@@ -1921,6 +2026,18 @@ class DirLens:
             safe_print(p.yellow("  [!] Exposed non-HTML or sensitive paths:"))
             for u in self.exposed_paths:
                 safe_print(p.yellow(f"      {u}"))
+
+        if self.wordpress_users_api_paths:
+            safe_print("")
+            safe_print(p.bright_magenta("  [!] WordPress users REST API endpoints:"))
+            for u in self.wordpress_users_api_paths:
+                safe_print(p.bright_magenta(f"      {u}"))
+
+        if self.wordpress_api_paths:
+            safe_print("")
+            safe_print(p.magenta("  [!] WordPress REST API endpoints:"))
+            for u in self.wordpress_api_paths:
+                safe_print(p.magenta(f"      {u}"))
 
         if self.login_warning_paths:
             safe_print("")
@@ -1954,6 +2071,8 @@ class DirLens:
                 "directories_tested": len(self.dirs_tested),
                 "listings_found": len(self.listings_found),
                 "exposed_paths": len(self.exposed_paths),
+                "wordpress_users_api_paths": len(self.wordpress_users_api_paths),
+                "wordpress_api_paths": len(self.wordpress_api_paths),
                 "forbidden_paths": len(self.forbidden_paths),
                 "login_warnings": len(self.login_warning_paths),
                 "sitemaps_checked": self.sitemaps_checked,
@@ -1965,6 +2084,8 @@ class DirLens:
             },
             "listings": self.listings_found,
             "exposed": self.exposed_paths,
+            "wordpress_users_api": self.wordpress_users_api_paths,
+            "wordpress_api": self.wordpress_api_paths,
             "forbidden": self.forbidden_paths,
             "login_warnings": self.login_warning_paths,
             "resources": sorted(self.resources_found),
@@ -1995,6 +2116,8 @@ def _build_html_report(data: dict) -> str:
     summary = data["summary"]
     listings = dedupe_result_urls(data["listings"])
     exposed = dedupe_result_urls(data.get("exposed", []))
+    wordpress_users_api = dedupe_result_urls(data.get("wordpress_users_api", []))
+    wordpress_api = dedupe_result_urls(data.get("wordpress_api", []))
     forbidden = dedupe_result_urls(data["forbidden"])
     login_warnings = dedupe_result_urls(data.get("login_warnings", []))
     dirs_tested = dedupe_result_urls(data["dirs_tested"])
@@ -2074,6 +2197,8 @@ def _build_html_report(data: dict) -> str:
   {row("Interrupted",        summary.get("interrupted", False))}
   <tr><td class="lbl">Listings found</td><td>{badge}</td></tr>
   {row("Exposed paths",      summary.get("exposed_paths", 0), "rgb(200, 166, 0)")}
+  {row("WP users API",       summary.get("wordpress_users_api_paths", 0), "rgb(255, 72, 210)")}
+  {row("WordPress API",      summary.get("wordpress_api_paths", 0), "rgb(211, 92, 255)")}
   {row("Forbidden paths",    summary["forbidden_paths"], "rgb(200, 166, 0)")}
   {row("Login warnings",     summary.get("login_warnings", 0), "rgb(200, 166, 0)")}
   {row("Rate limits 429",    summary.get("rate_limit_hits", 0), "rgb(200, 166, 0)")}
@@ -2082,6 +2207,8 @@ def _build_html_report(data: dict) -> str:
 </table></div>
 <div class="section"><h2>Open Directory Listings</h2><table>{url_rows(listings, "rgb(26, 156, 62)")}</table></div>
 <div class="section"><h2>Exposed Non-HTML or Sensitive Paths</h2><table>{url_rows(exposed, "rgb(200, 166, 0)")}</table></div>
+<div class="section"><h2>WordPress Users REST API Endpoints</h2><table>{url_rows(wordpress_users_api, "rgb(255, 72, 210)")}</table></div>
+<div class="section"><h2>WordPress REST API Endpoints</h2><table>{url_rows(wordpress_api, "rgb(211, 92, 255)")}</table></div>
 <div class="section"><h2>Forbidden Paths (403)</h2><table>{url_rows(forbidden, "rgb(200, 166, 0)")}</table></div>
 <div class="section"><h2>Login-like Text Warnings</h2><table>{url_rows(login_warnings, "rgb(200, 166, 0)")}</table></div>
 <div class="section"><h2>All Directories Tested ({len(dirs_tested)})</h2><table>{dirs_html}</table></div>

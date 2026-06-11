@@ -7,18 +7,23 @@ It crawls only paths discovered on the target website, such as links, resources,
 common paths that exist on most sites but are rarely linked explicitly.
 It does not use bruteforce or large wordlists.
 
+By LTX  
 https://github.com/LTX128/Dirlens
 
 ## Features
 
 - Detects exposed directory listings
 - Flags exposed non-HTML or sensitive paths (`.log`, `.env`, `.sql`, text files)
+- Highlights `/wp-json/wp/v2/users` and `?rest_route=/wp/v2/users` with a
+  dedicated `[WP-USERS]` finding
+- Highlights other public WordPress REST API endpoints with `[WP-API]`
 - Keeps login-like pages in the scan and reports them as warnings instead of
   rejecting them
 - Crawls discovered same-domain resources
 - Checks `robots.txt` and performs exhaustive sitemap discovery (see below)
 - Seeds the scan with a curated set of common paths (`/contact`, `/admin`,
-  `/wp-admin`, `/uploads`, sensitive config/log names, API docs, etc.)
+  `/wp-admin`, `/wp-json/wp/v2/users`, `/uploads`, sensitive config/log names,
+  API docs, etc.)
 - Shows HTTP status codes during testing
 - Shows real phase progress based on completed work and discovered results
 - Deduplicates result URLs and normalizes trailing-slash duplicates
@@ -91,9 +96,6 @@ Use `-h` to display the help screen:
 python dirlens.py -h
 ```
 
-## Preview
-![DirLens preview](screenshot.png)
-
 ## Speed mode
 
 Use `--speed` when you want DirLens to run as fast as possible. It uses many
@@ -124,7 +126,8 @@ terminal summary and reports.
 
 With `--quiet`, the banner and scan parameters are still shown at startup so you
 always know what is running. Everything else — phase headers, `[TEST]` lines,
-crawl waves — is silenced. Only open listings (`[FOUND]`), exposed paths
+crawl waves — is silenced. Only open listings (`[FOUND]`), WordPress users API
+findings (`[WP-USERS]`), WordPress REST API findings (`[WP-API]`), exposed paths
 (`[EXPOSED]`), and forbidden paths (`[403]`) are printed as they are discovered,
 followed by a short summary.
 
@@ -141,8 +144,9 @@ still prints the summary plus any findings already discovered. If `--json` or
 
 Many paths exist on sites without being linked anywhere — `/contact`, `/admin`,
 `/uploads`, `/documents`, `/api`, etc. DirLens automatically seeds the directory
-test queue with 201 curated common paths so they are always tested,
-even if the crawler never finds a link to them.
+test queue with 201 curated common paths plus WordPress REST API probes such as
+`/wp-json/wp/v2/users`, so they are always tested even if the crawler never finds
+a link to them.
 
 This is not bruteforce — it is a small curated list of universally common paths,
 not a wordlist attack. Use `--no-common` to disable this behavior if needed.
@@ -186,8 +190,11 @@ rel=sitemap` headers are followed automatically.
 
 DirLens normalizes finding URLs before printing them. For example, if both
 `/wp-admin` and `/wp-admin/` are discovered, the report keeps a single canonical
-entry. Result lists are also deduplicated, and final finding sections are printed
-in full without `... more` truncation.
+entry. `/wp-json/wp/v2/users` and `?rest_route=/wp/v2/users` are shown
+separately with `[WP-USERS]`, while other WordPress REST API endpoints use
+`[WP-API]`. Both categories get their own JSON/HTML report sections. Result
+lists are also deduplicated, and final finding sections are printed in full
+without `... more` truncation.
 
 If a page contains login-like text, DirLens does not reject it. The URL is kept
 in normal detection and also listed under login warnings at the end of the scan
@@ -197,9 +204,10 @@ and in reports.
 
 When `--json` or `--html` is used, reports are saved in the `reports/` folder.
 The report includes the target, scan metadata, discovered resources, tested
-directories, exposed non-HTML/sensitive paths, forbidden paths, login warnings,
-rate-limit counters, timeout counters, interruption status, errors, and any open
-directory listings found.
+directories, WordPress users API endpoints, other WordPress REST API endpoints,
+exposed non-HTML/sensitive paths, forbidden paths, login warnings, rate-limit
+counters, timeout counters, interruption status, errors, and any open directory
+listings found.
 
 ## Requirements
 
