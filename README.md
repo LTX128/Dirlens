@@ -7,7 +7,6 @@ It crawls only paths discovered on the target website, such as links, resources,
 common paths that exist on most sites but are rarely linked explicitly.
 It does not use bruteforce or large wordlists.
 
-By LTX  
 https://github.com/LTX128/Dirlens
 
 ## Features
