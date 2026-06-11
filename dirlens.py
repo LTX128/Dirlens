@@ -1210,7 +1210,6 @@ class DirLens:
 
         return child_sitemaps, content_urls
 
-    # Real-world sitemaps are often malformed, so XML parsing has a fallback.
     def _extract_sitemap_urls_with_regex(self, text: str) -> tuple:
         """
         Fallback extractor for real-world malformed sitemap XML.
